@@ -1,0 +1,2 @@
+Name,SKU,Barcode,Category,Cost Price,Selling Price,Stock,Low Stock Threshold,Unit,Active
+Sample Product,SKU-SAMPLE,TEMPLATE-Barcode,Sample Category,10.00,15.00,100,10,piece,Yes
