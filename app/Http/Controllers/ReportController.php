@@ -76,7 +76,7 @@ class ReportController extends Controller
         $year = $request->year ?: now()->year;
         $monthly = $this->reportService->monthlySales($year, $month);
 
-        $prevMonth = $this->reportService->monthlySales($month === 1 ? 12 : $month - 1, $month === 1 ? $year - 1 : $year);
+        $prevMonth = $this->reportService->monthlySales($month === 1 ? $year - 1 : $year, $month === 1 ? 12 : $month - 1);
 
         $growthRate = $prevMonth['total_sales'] > 0
             ? round((($monthly['total_sales'] - $prevMonth['total_sales']) / $prevMonth['total_sales']) * 100, 1)

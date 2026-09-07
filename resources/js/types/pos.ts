@@ -170,7 +170,8 @@ export interface InventoryMovement {
     id: number;
     product_id: number | null;
     product_variant_id: number | null;
-    type: 'stock_in' | 'stock_out' | 'adjustment' | 'return' | 'sale' | 'initial';
+    type:
+        'stock_in' | 'stock_out' | 'adjustment' | 'return' | 'sale' | 'initial';
     quantity: number;
     quantity_before: number;
     quantity_after: number;
@@ -445,6 +446,34 @@ export interface StoreSettings {
     tax_rate?: number;
     currency_symbol?: string;
     currency_code?: string;
+    storefront_enabled?: boolean;
+    online_ordering_enabled?: boolean;
+}
+
+export interface OnlineOrder {
+    id: number;
+    reference_number: string;
+    customer_name: string | null;
+    customer_phone: string | null;
+    customer_email: string | null;
+    delivery_address: string | null;
+    order_type: 'delivery' | 'pickup';
+    status:
+        | 'pending'
+        | 'confirmed'
+        | 'preparing'
+        | 'ready'
+        | 'out_for_delivery'
+        | 'completed'
+        | 'cancelled';
+    payment_status: 'unpaid' | 'paid' | 'refunded';
+    total: number;
+    item_count: number;
+    notes: string | null;
+    requested_at: string | null;
+    fulfilled_at: string | null;
+    created_at: string;
+    updated_at: string;
 }
 
 export interface GoodsReceiving {

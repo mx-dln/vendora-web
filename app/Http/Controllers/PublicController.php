@@ -6,14 +6,20 @@ use App\Models\Category;
 use App\Models\Product;
 use App\Models\Promotion;
 use App\Models\StoreSetting;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class PublicController extends Controller
 {
-    public function index(): Response
+    public function index(): Response|RedirectResponse
     {
+        if (! $this->isStorefrontEnabled()) {
+            return redirect()->route('login');
+        }
+
         $stats = $this->getCached('public.stats', function () {
             return [
                 'total_products' => Product::where('status', 'active')->count(),
@@ -68,8 +74,12 @@ class PublicController extends Controller
         return Inertia::render('public/index', compact('stats', 'newest', 'bestsellers', 'categories', 'promotions', 'store'));
     }
 
-    public function products(Request $request): Response
+    public function products(Request $request): Response|RedirectResponse
     {
+        if (! $this->isStorefrontEnabled()) {
+            return redirect()->route('login');
+        }
+
         $query = Product::with('category')
             ->where('status', 'active');
 
@@ -77,8 +87,11 @@ class PublicController extends Controller
             $query->where(function ($q) use ($search) {
                 $q->where('name', 'like', "%{$search}%")
                     ->orWhere('sku', 'like', "%{$search}%")
-                    ->orWhere('barcode', 'like', "%{$search}%")
-                    ->orWhere('brand', 'like', "%{$search}%");
+                    ->orWhere('barcode', 'like', "%{$search}%");
+
+                if (Schema::hasColumn('products', 'brand')) {
+                    $q->orWhere('brand', 'like', "%{$search}%");
+                }
             });
         }
 
@@ -129,8 +142,12 @@ class PublicController extends Controller
         return Inertia::render('public/products', compact('products', 'categories', 'store'));
     }
 
-    public function product(string $slug): Response
+    public function product(string $slug): Response|RedirectResponse
     {
+        if (! $this->isStorefrontEnabled()) {
+            return redirect()->route('login');
+        }
+
         $product = Product::with('category')
             ->where('slug', $slug)
             ->where('status', 'active')
@@ -149,8 +166,12 @@ class PublicController extends Controller
         return Inertia::render('public/product', compact('product', 'related', 'store'));
     }
 
-    public function category(string $slug, Request $request): Response
+    public function category(string $slug, Request $request): Response|RedirectResponse
     {
+        if (! $this->isStorefrontEnabled()) {
+            return redirect()->route('login');
+        }
+
         $category = Category::where('slug', $slug)->where('is_active', true)->firstOrFail();
 
         $query = Product::with('category')
@@ -173,8 +194,12 @@ class PublicController extends Controller
         return Inertia::render('public/category', compact('category', 'products', 'store'));
     }
 
-    public function promotions(): Response
+    public function promotions(): Response|RedirectResponse
     {
+        if (! $this->isStorefrontEnabled()) {
+            return redirect()->route('login');
+        }
+
         $promotions = Promotion::with('category', 'product')
             ->where('is_active', true)
             ->where(function ($q) {
@@ -202,8 +227,26 @@ class PublicController extends Controller
                 'email' => StoreSetting::getValue('store_email', ''),
                 'tagline' => StoreSetting::getValue('store_tagline', 'Your Neighborhood Store'),
                 'hours' => StoreSetting::getValue('store_hours', ''),
+                'online_ordering_enabled' => $this->isOnlineOrderingEnabled(),
             ];
         }, 3600);
+    }
+
+    private function isStorefrontEnabled(): bool
+    {
+        return $this->settingEnabled('storefront_enabled', true);
+    }
+
+    private function isOnlineOrderingEnabled(): bool
+    {
+        return $this->settingEnabled('online_ordering_enabled', false);
+    }
+
+    private function settingEnabled(string $key, bool $default): bool
+    {
+        $value = $this->getCached('public.'.$key, fn () => StoreSetting::getValue($key, $default ? '1' : '0'), 3600);
+
+        return in_array($value, ['1', 1, true, 'true', 'on'], true);
     }
 
     private function getCached(string $key, callable $callback, int $ttl = 600): mixed

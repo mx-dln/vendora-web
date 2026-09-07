@@ -12,6 +12,7 @@ use App\Models\Transaction;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class OpenAIAssistantService
@@ -40,6 +41,17 @@ class OpenAIAssistantService
         }
 
         AssistantMessage::create(['conversation_id' => $conversation->id, 'role' => 'user', 'content' => $message]);
+
+        if ($directAnswer = $this->answerOwnerDataQuestion($message, $conversation)) {
+            AssistantMessage::create(['conversation_id' => $conversation->id, 'role' => 'assistant', 'content' => $directAnswer]);
+
+            return [
+                'message' => $directAnswer,
+                'conversation_id' => $conversation->id,
+                'conversation_title' => $conversation->title,
+                'suggestions' => ['Show low stock items', 'What are my sales today?', 'Review another invoice', 'Check product stock'],
+            ];
+        }
 
         $messages = $this->buildMessages($conversation, $message, $currentPage);
 
@@ -88,6 +100,20 @@ class OpenAIAssistantService
         Log::info('[AI] User message received', ['conversation_id' => $conversation->id]);
 
         AssistantMessage::create(['conversation_id' => $conversation->id, 'role' => 'user', 'content' => $message]);
+
+        if ($directAnswer = $this->answerOwnerDataQuestion($message, $conversation)) {
+            $response = new StreamedResponse(function () use ($conversation, $directAnswer) {
+                $this->sendSSE('text', ['content' => $directAnswer]);
+                AssistantMessage::create(['conversation_id' => $conversation->id, 'role' => 'assistant', 'content' => $directAnswer]);
+                $this->sendSSE('done', ['conversation_id' => $conversation->id]);
+            });
+
+            $response->headers->set('Content-Type', 'text/event-stream');
+            $response->headers->set('Cache-Control', 'no-cache, no-store, must-revalidate');
+            $response->headers->set('X-Accel-Buffering', 'no');
+
+            return $response;
+        }
 
         $messages = $this->buildMessages($conversation, $message, $currentPage);
 
@@ -845,6 +871,245 @@ PROMPT;
         Log::info('[AI] Tool completed', ['name' => $name, 'has_error' => isset($result['error'])]);
 
         return $result;
+    }
+
+    private function answerOwnerDataQuestion(string $message, AssistantConversation $conversation): ?string
+    {
+        $normalized = strtolower($message);
+        $invoiceNumber = $this->extractInvoiceNumber($message);
+
+        if ($this->isTopProductsQuestion($normalized)) {
+            return $this->answerTopProducts();
+        }
+
+        if (! $invoiceNumber && $this->isInvoiceFollowUpQuestion($normalized)) {
+            $invoiceNumber = $this->extractRecentInvoiceNumber($conversation);
+        }
+
+        if ($invoiceNumber) {
+            if (str_contains($normalized, 'product') || str_contains($normalized, 'bought') || str_contains($normalized, 'purchased') || str_contains($normalized, 'sold') || str_contains($normalized, 'item')) {
+                return $this->answerInvoiceItems($invoiceNumber);
+            }
+        }
+
+        if ((str_contains($normalized, 'low stock') || str_contains($normalized, 'low stocks')) && (str_contains($normalized, 'inventory') || str_contains($normalized, 'product') || str_contains($normalized, 'separate') || str_contains($normalized, 'show') || str_contains($normalized, 'give'))) {
+            return $this->answerInventoryWithLowStock();
+        }
+
+        if (preg_match('/\b(?:do we have|have|stock|available|find|search)\b.+?\b(?:product|item)?\b/i', $message)) {
+            $productName = $this->extractProductSearchTerm($message);
+
+            if ($productName !== null) {
+                return $this->answerProductAvailability($productName);
+            }
+        }
+
+        return null;
+    }
+
+    private function answerTopProducts(): string
+    {
+        $user = Auth::user();
+        if (! $user?->can('products.view')) {
+            return 'You do not have permission to view top products. Required permission: products.view';
+        }
+
+        $products = $this->salesService->getTopProducts(10);
+
+        if ($products->isEmpty()) {
+            return 'No product sales data is available yet.';
+        }
+
+        $json = json_encode([
+            'type' => 'products',
+            'items' => $products->map(fn ($product) => [
+                'name' => $product->product_name,
+                'sku' => null,
+                'stock' => null,
+                'price' => (float) $product->total_revenue,
+                'status' => $this->formatQuantity((float) $product->total_qty).' sold',
+            ])->values(),
+        ]);
+
+        $lines = $products
+            ->values()
+            ->map(fn ($product, int $index) => ($index + 1).". {$product->product_name}: ".$this->formatQuantity((float) $product->total_qty).' sold, ₱'.number_format((float) $product->total_revenue, 2).' revenue')
+            ->implode("\n");
+
+        return "Top-selling products by quantity sold:\n\n{$lines}\n\n<vendora-json>{$json}</vendora-json>";
+    }
+
+    private function answerInvoiceItems(string $invoiceNumber): string
+    {
+        $user = Auth::user();
+        if (! $user?->can('sales.view')) {
+            return 'You do not have permission to view invoice details. Required permission: sales.view';
+        }
+
+        $transaction = Transaction::with(['items', 'customer:id,name', 'user:id,name'])
+            ->where('reference_number', $invoiceNumber)
+            ->first();
+
+        if (! $transaction) {
+            return "I could not find invoice {$invoiceNumber}.";
+        }
+
+        if ($transaction->items->isEmpty()) {
+            return "Invoice {$transaction->reference_number} exists, but it has no recorded line items.";
+        }
+
+        $rows = $transaction->items->map(fn ($item) => [
+            $item->product_name,
+            $this->formatQuantity((float) $item->quantity),
+            '₱'.number_format((float) $item->unit_price, 2),
+            '₱'.number_format((float) $item->total, 2),
+        ])->values();
+
+        $json = json_encode([
+            'type' => 'table',
+            'headers' => ['Item', 'Qty', 'Price', 'Total'],
+            'rows' => $rows,
+        ]);
+
+        return "Invoice {$transaction->reference_number} sold {$transaction->items->count()} item type(s), total ₱".number_format((float) $transaction->total, 2).".\n\n<vendora-json>{$json}</vendora-json>";
+    }
+
+    private function answerInventoryWithLowStock(): string
+    {
+        $user = Auth::user();
+        if (! $user?->can('inventory.view')) {
+            return 'You do not have permission to view inventory. Required permission: inventory.view';
+        }
+
+        $products = Product::with('category:id,name')
+            ->where('status', 'active')
+            ->where('track_inventory', true)
+            ->orderBy('name')
+            ->get();
+
+        if ($products->isEmpty()) {
+            return 'There are no active inventory-tracked products yet.';
+        }
+
+        $lowStock = $products
+            ->filter(fn (Product $product) => $product->stock_quantity > 0 && $product->stock_quantity <= $product->low_stock_threshold)
+            ->values();
+
+        $inventoryJson = json_encode([
+            'type' => 'products',
+            'items' => $products->map(fn (Product $product) => [
+                'name' => $product->name,
+                'sku' => $product->sku,
+                'stock' => (int) $product->stock_quantity,
+                'price' => (float) $product->selling_price,
+                'status' => $product->stock_quantity <= 0 ? 'Out' : ($product->stock_quantity <= $product->low_stock_threshold ? 'Low Stock' : 'Active'),
+            ])->values(),
+        ]);
+
+        if ($lowStock->isEmpty()) {
+            return "Inventory has {$products->count()} active tracked product(s). No low-stock products right now.\n\n<vendora-json>{$inventoryJson}</vendora-json>";
+        }
+
+        $lowStockLines = $lowStock
+            ->map(fn (Product $product) => "- {$product->name}: {$product->stock_quantity} left, threshold {$product->low_stock_threshold}")
+            ->implode("\n");
+
+        return "Inventory has {$products->count()} active tracked product(s). Low-stock products are separated below:\n\n{$lowStockLines}\n\n<vendora-json>{$inventoryJson}</vendora-json>";
+    }
+
+    private function answerProductAvailability(string $searchTerm): string
+    {
+        $user = Auth::user();
+        if (! $user?->can('products.view')) {
+            return 'You do not have permission to view product details. Required permission: products.view';
+        }
+
+        $products = Product::with('category:id,name')
+            ->where('status', 'active')
+            ->where(function ($query) use ($searchTerm) {
+                $query->where('name', 'like', "%{$searchTerm}%")
+                    ->orWhere('sku', 'like', "%{$searchTerm}%")
+                    ->orWhere('barcode', 'like', "%{$searchTerm}%");
+
+                if (Schema::hasColumn('products', 'brand')) {
+                    $query->orWhere('brand', 'like', "%{$searchTerm}%");
+                }
+            })
+            ->orderBy('name')
+            ->limit(10)
+            ->get();
+
+        if ($products->isEmpty()) {
+            return "I could not find an active product matching \"{$searchTerm}\".";
+        }
+
+        $json = json_encode([
+            'type' => 'products',
+            'items' => $products->map(fn (Product $product) => [
+                'name' => $product->name,
+                'sku' => $product->sku,
+                'stock' => (int) $product->stock_quantity,
+                'price' => (float) $product->selling_price,
+                'status' => $product->stock_quantity <= 0 ? 'Out' : ($product->stock_quantity <= $product->low_stock_threshold ? 'Low Stock' : 'Active'),
+            ])->values(),
+        ]);
+
+        $summary = $products
+            ->map(fn (Product $product) => "{$product->name}: {$product->stock_quantity} {$product->unit} in stock at ₱".number_format((float) $product->selling_price, 2))
+            ->implode("\n");
+
+        return "Yes, here is what I found for \"{$searchTerm}\":\n\n{$summary}\n\n<vendora-json>{$json}</vendora-json>";
+    }
+
+    private function extractInvoiceNumber(string $message): ?string
+    {
+        if (preg_match('/\bINV-\d{8}-\d{6}\b/i', $message, $matches)) {
+            return strtoupper($matches[0]);
+        }
+
+        return null;
+    }
+
+    private function isTopProductsQuestion(string $normalized): bool
+    {
+        return (str_contains($normalized, 'top') || str_contains($normalized, 'best'))
+            && (str_contains($normalized, 'selling') || str_contains($normalized, 'seller') || str_contains($normalized, 'sold'))
+            && (str_contains($normalized, 'product') || str_contains($normalized, 'item'));
+    }
+
+    private function isInvoiceFollowUpQuestion(string $normalized): bool
+    {
+        if (str_contains($normalized, 'invoice') || str_contains($normalized, 'receipt') || str_contains($normalized, 'transaction')) {
+            return true;
+        }
+
+        return (str_contains($normalized, 'here') || str_contains($normalized, 'this') || str_contains($normalized, 'that'))
+            && (str_contains($normalized, 'product') || str_contains($normalized, 'item') || str_contains($normalized, 'bought') || str_contains($normalized, 'purchased') || str_contains($normalized, 'sold'));
+    }
+
+    private function extractRecentInvoiceNumber(AssistantConversation $conversation): ?string
+    {
+        $recentText = $conversation->messages()
+            ->latest()
+            ->take(8)
+            ->pluck('content')
+            ->implode("\n");
+
+        return $this->extractInvoiceNumber($recentText);
+    }
+
+    private function extractProductSearchTerm(string $message): ?string
+    {
+        $term = preg_replace('/\b(do we have|do you have|have|stock|available|find|search|product|item|here|current|the|a|an|any)\b/i', ' ', $message);
+        $term = trim((string) preg_replace('/\s+/', ' ', $term));
+        $term = trim($term, " ?.,\t\n\r\0\x0B");
+
+        return $term !== '' ? $term : null;
+    }
+
+    private function formatQuantity(float $quantity): string
+    {
+        return floor($quantity) === $quantity ? (string) (int) $quantity : number_format($quantity, 2);
     }
 
     private function getInvoiceByNumber(string $invoiceNumber): array

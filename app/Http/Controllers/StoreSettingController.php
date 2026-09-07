@@ -39,6 +39,8 @@ class StoreSettingController extends Controller
             'tax_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'currency_symbol' => ['nullable', 'string', 'max:10'],
             'currency_code' => ['nullable', 'string', 'max:10'],
+            'storefront_enabled' => ['boolean'],
+            'online_ordering_enabled' => ['boolean'],
         ]);
 
         foreach ($validated as $key => $value) {
@@ -47,6 +49,10 @@ class StoreSettingController extends Controller
                 ['value' => is_bool($value) ? ($value ? '1' : '0') : (string) $value]
             );
         }
+
+        cache()->forget('public.store');
+        cache()->forget('public.storefront_enabled');
+        cache()->forget('public.online_ordering_enabled');
 
         if ($request->wantsJson()) {
             return response()->json(['success' => true, 'message' => 'Settings updated successfully.']);

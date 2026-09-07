@@ -17,6 +17,7 @@ use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\InventoryTransferController;
 use App\Http\Controllers\LoyaltyController;
 use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\OnlineOrderController;
 use App\Http\Controllers\POSController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\PromotionController;
@@ -80,6 +81,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('/resume/{id}', [POSController::class, 'resume'])->name('resume');
         Route::delete('/held/{heldTransaction}', [POSController::class, 'destroyHeld'])->name('held.destroy');
     });
+
+    Route::get('online-orders', [OnlineOrderController::class, 'index'])->name('online-orders.index');
+    Route::patch('online-orders/{onlineOrder}', [OnlineOrderController::class, 'update'])->name('online-orders.update');
 
     // Sales
     Route::prefix('sales')->name('sales.')->group(function () {

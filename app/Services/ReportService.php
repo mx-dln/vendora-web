@@ -7,6 +7,8 @@ use App\Models\Expense;
 use App\Models\Product;
 use App\Models\Transaction;
 use App\Models\TransactionItem;
+use Carbon\Carbon;
+use Carbon\CarbonPeriod;
 use Illuminate\Support\Facades\DB;
 
 class ReportService
@@ -96,6 +98,16 @@ class ReportService
             ->where('status', TransactionStatus::Completed->value)
             ->get();
 
+        $hourlyBreakdown = collect(range(0, 23))->map(function (int $hour) use ($transactions) {
+            $hourTransactions = $transactions->filter(fn (Transaction $transaction) => (int) $transaction->created_at->format('G') === $hour);
+
+            return [
+                'hour' => Carbon::createFromTime($hour)->format('g A'),
+                'count' => $hourTransactions->count(),
+                'total' => $hourTransactions->sum('total'),
+            ];
+        })->values();
+
         return [
             'date' => $date,
             'total_sales' => $transactions->sum('total'),
@@ -109,12 +121,7 @@ class ReportService
                     'count' => $t->count(),
                     'total' => $t->sum('total'),
                 ]),
-            'hourly_breakdown' => $transactions->groupBy(fn ($t) => $t->created_at->format('H'))
-                ->map(fn ($t) => [
-                    'hour' => $t->first()->created_at->format('g A'),
-                    'count' => $t->count(),
-                    'total' => $t->sum('total'),
-                ])->sortKeys()->values(),
+            'hourly_breakdown' => $hourlyBreakdown,
         ];
     }
 
@@ -125,6 +132,21 @@ class ReportService
             ->where('status', TransactionStatus::Completed->value)
             ->get();
 
+        $startOfMonth = Carbon::create($year, $month, 1)->startOfDay();
+        $endOfMonth = $startOfMonth->copy()->endOfMonth();
+        $transactionsByDate = $transactions->groupBy(fn (Transaction $transaction) => $transaction->created_at->toDateString());
+        $dailyBreakdown = collect(CarbonPeriod::create($startOfMonth, $endOfMonth))
+            ->map(function (Carbon $date) use ($transactionsByDate) {
+                $dateTransactions = $transactionsByDate->get($date->toDateString(), collect());
+
+                return [
+                    'date' => $date->format('M d'),
+                    'count' => $dateTransactions->count(),
+                    'total' => $dateTransactions->sum('total'),
+                ];
+            })
+            ->values();
+
         return [
             'year' => $year,
             'month' => $month,
@@ -134,12 +156,7 @@ class ReportService
             'total_items' => $transactions->sum('item_count'),
             'total_discounts' => $transactions->sum('discount_amount'),
             'total_tax' => $transactions->sum('tax_amount'),
-            'daily_breakdown' => $transactions->groupBy(fn ($t) => $t->created_at->format('Y-m-d'))
-                ->map(fn ($t) => [
-                    'date' => $t->first()->created_at->format('M d'),
-                    'count' => $t->count(),
-                    'total' => $t->sum('total'),
-                ])->sortKeys()->values(),
+            'daily_breakdown' => $dailyBreakdown,
         ];
     }
 
