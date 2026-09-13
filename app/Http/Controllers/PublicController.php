@@ -156,7 +156,7 @@ class PublicController extends Controller
         $related = Product::with('category')
             ->where('status', 'active')
             ->where('id', '!=', $product->id)
-            ->where(fn ($q) => $q->where('category_id', $product->category_id)->orWhere('brand', $product->brand))
+            ->where(fn ($q) => $q->where('category_id', $product->category_id))
             ->inRandomOrder()
             ->take(4)
             ->get();

@@ -56,7 +56,7 @@ export default function Dashboard({
                 {/* KPI Cards */}
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
                     <StatCard title="Today's Sales" value={`₱${Number(stats.today_sales).toLocaleString()}`}
-                        description={`${stats.today_transactions} transactions`} icon={<DollarSign className="size-5" />} />
+                        description={`${stats.today_transactions} transactions`} icon={<TrendingUp className="size-5" />} />
                     <StatCard title="Today's Profit" value={`₱${Number(stats.today_profit).toLocaleString()}`}
                         description="Estimated gross profit" icon={<TrendingUp className="size-5" />} />
                     <StatCard title="Transactions" value={stats.today_transactions}

@@ -3,6 +3,10 @@
 namespace Database\Seeders;
 
 use App\Models\User;
+use Database\Seeders\CategorySeeder;
+use Database\Seeders\DemoUsersSeeder;
+use Database\Seeders\ExpenseCategorySeeder;
+use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Database\Seeder;
 
 class DatabaseSeeder extends Seeder
@@ -17,28 +21,31 @@ class DatabaseSeeder extends Seeder
             'is_active' => true,
         ]);
 
-        User::create([
-            'name' => 'Cashier User',
-            'email' => 'cashier@vendora.test',
-            'password' => bcrypt('password'),
-            'role' => 'cashier',
-            'is_active' => true,
-        ]);
+        // User::create([
+        //     'name' => 'Cashier User',
+        //     'email' => 'cashier@vendora.test',
+        //     'password' => bcrypt('password'),
+        //     'role' => 'cashier',
+        //     'is_active' => true,
+        // ]);
 
-        User::create([
-            'name' => 'Manager',
-            'email' => 'manager@vendora.test',
-            'password' => bcrypt('password'),
-            'role' => 'manager',
-            'is_active' => true,
-        ]);
+        // User::create([
+        //     'name' => 'Manager',
+        //     'email' => 'manager@vendora.test',
+        //     'password' => bcrypt('password'),
+        //     'role' => 'manager',
+        //     'is_active' => true,
+        // ]);
 
         $this->call([
+            RolesAndPermissionsSeeder::class,
+            DemoUsersSeeder::class,
             CategorySeeder::class,
             ProductSeeder::class,
             CustomerSeeder::class,
             SupplierSeeder::class,
             TransactionSeeder::class,
+            ExpenseCategorySeeder::class,
         ]);
     }
 }
