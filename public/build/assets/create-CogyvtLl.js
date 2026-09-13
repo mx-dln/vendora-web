@@ -1,0 +1,1 @@
+import{n as e,t}from"./jsx-runtime-Dnhok7-n.js";import{t as n}from"./purchase-orders-B62_FiZ5.js";import r from"./form-DHepJGTB.js";var i=e(),a=t();function o(e){let t=(0,i.c)(2),n;return t[0]===e?n=t[1]:(n=(0,a.jsx)(r,{...e}),t[0]=e,t[1]=n),n}o.layout={breadcrumbs:[{title:`Purchase Orders`,href:n.index.url()},{title:`Create`,href:n.create.url()}]};export{o as default};
