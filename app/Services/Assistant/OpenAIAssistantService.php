@@ -5,11 +5,13 @@ namespace App\Services\Assistant;
 use App\Enums\TransactionStatus;
 use App\Models\AssistantConversation;
 use App\Models\AssistantMessage;
+use App\Models\CashTransaction;
 use App\Models\Customer;
 use App\Models\Expense;
 use App\Models\KnowledgeArticle;
 use App\Models\OnlineOrder;
 use App\Models\Product;
+use App\Models\Shift;
 use App\Models\StoreSetting;
 use App\Models\Transaction;
 use App\Models\TransactionItem;
@@ -991,6 +993,10 @@ PROMPT;
             return $this->answerTopProducts();
         }
 
+        if ($this->isShiftShortQuestion($normalized)) {
+            return $this->answerActiveShiftCashPosition();
+        }
+
         if (! $invoiceNumber && $this->isInvoiceFollowUpQuestion($normalized)) {
             $invoiceNumber = $this->extractRecentInvoiceNumber($conversation);
         }
@@ -1005,7 +1011,7 @@ PROMPT;
             return $this->answerInventoryWithLowStock();
         }
 
-        if (preg_match('/\b(?:do we have|have|stock|available|find|search)\b.+?\b(?:product|item)?\b/i', $message)) {
+        if ($this->isProductAvailabilityQuestion($message, $normalized)) {
             $productName = $this->extractProductSearchTerm($message);
 
             if ($productName !== null) {
@@ -1014,6 +1020,54 @@ PROMPT;
         }
 
         return null;
+    }
+
+    private function answerActiveShiftCashPosition(): string
+    {
+        $user = Auth::user();
+        if (! $user?->can('sales.view')) {
+            return 'You do not have permission to view the active POS shift. Required permission: sales.view';
+        }
+
+        $shift = Shift::where('user_id', $user->id)
+            ->where('status', 'open')
+            ->latest()
+            ->first();
+
+        if (! $shift) {
+            return 'There is no open shift for your user right now, so the system cannot calculate a current over/short position.';
+        }
+
+        $sales = (float) Transaction::where('user_id', $user->id)
+            ->where('created_at', '>=', $shift->opened_at)
+            ->where('status', TransactionStatus::Completed->value)
+            ->where('payment_method', 'cash')
+            ->sum('total');
+
+        $cashIn = (float) CashTransaction::where('user_id', $user->id)
+            ->where('created_at', '>=', $shift->opened_at)
+            ->where('type', 'cash_in')
+            ->sum('amount');
+
+        $cashOut = (float) CashTransaction::where('user_id', $user->id)
+            ->where('created_at', '>=', $shift->opened_at)
+            ->where('type', 'cash_out')
+            ->sum('amount');
+
+        $expectedCash = (float) $shift->opening_balance + $sales + $cashIn - $cashOut;
+
+        $json = json_encode([
+            'type' => 'kpi',
+            'columns' => 2,
+            'items' => [
+                ['label' => 'Opening Cash', 'value' => '₱'.number_format((float) $shift->opening_balance, 2), 'icon' => 'Wallet'],
+                ['label' => 'Cash Sales', 'value' => '₱'.number_format($sales, 2), 'icon' => 'ShoppingCart'],
+                ['label' => 'Cash In/Out', 'value' => '₱'.number_format($cashIn - $cashOut, 2), 'icon' => 'ArrowLeftRight'],
+                ['label' => 'Expected Cash', 'value' => '₱'.number_format($expectedCash, 2), 'icon' => 'Scale'],
+            ],
+        ]);
+
+        return 'Your shift is still open, so Vendora cannot know whether you are short or over until the actual closing cash is counted and entered. Based on recorded cash movement, the expected drawer cash is ₱'.number_format($expectedCash, 2).". If your counted cash is below that amount, the difference is short; if it is above, the difference is over.\n\n<vendora-json>{$json}</vendora-json>";
     }
 
     private function answerTopProducts(): string
@@ -1186,6 +1240,24 @@ PROMPT;
             && (str_contains($normalized, 'product') || str_contains($normalized, 'item'));
     }
 
+    private function isShiftShortQuestion(string $normalized): bool
+    {
+        $mentionsVariance = str_contains($normalized, 'short')
+            || str_contains($normalized, 'over')
+            || str_contains($normalized, 'difference')
+            || str_contains($normalized, 'variance');
+
+        if (! $mentionsVariance) {
+            return false;
+        }
+
+        return str_contains($normalized, 'close')
+            || str_contains($normalized, 'closing')
+            || str_contains($normalized, 'shift')
+            || str_contains($normalized, 'cash drawer')
+            || str_contains($normalized, 'drawer');
+    }
+
     private function isInvoiceFollowUpQuestion(string $normalized): bool
     {
         if (str_contains($normalized, 'invoice') || str_contains($normalized, 'receipt') || str_contains($normalized, 'transaction')) {
@@ -1205,6 +1277,35 @@ PROMPT;
             ->implode("\n");
 
         return $this->extractInvoiceNumber($recentText);
+    }
+
+    private function isProductAvailabilityQuestion(string $message, string $normalized): bool
+    {
+        if (! preg_match('/\b(?:do we have|do you have|have|stock|available|find|search)\b/i', $message)) {
+            return false;
+        }
+
+        if (str_contains($normalized, 'product') || str_contains($normalized, 'item') || str_contains($normalized, 'sku') || str_contains($normalized, 'barcode')) {
+            return true;
+        }
+
+        $searchTerm = $this->extractProductSearchTerm($message);
+        if ($searchTerm === null) {
+            return false;
+        }
+
+        return Product::query()
+            ->where('status', 'active')
+            ->where(function ($query) use ($searchTerm) {
+                $query->where('name', 'like', "%{$searchTerm}%")
+                    ->orWhere('sku', 'like', "%{$searchTerm}%")
+                    ->orWhere('barcode', 'like', "%{$searchTerm}%");
+
+                if (Schema::hasColumn('products', 'brand')) {
+                    $query->orWhere('brand', 'like', "%{$searchTerm}%");
+                }
+            })
+            ->exists();
     }
 
     private function extractProductSearchTerm(string $message): ?string

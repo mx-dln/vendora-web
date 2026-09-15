@@ -3,6 +3,7 @@
 use App\Models\Category;
 use App\Models\OnlineOrder;
 use App\Models\Product;
+use App\Models\Shift;
 use App\Models\StoreSetting;
 use App\Models\Transaction;
 use App\Models\TransactionItem;
@@ -243,6 +244,41 @@ test('assistant returns product availability from system data', function () {
         ->toContain('Beef Loaf 340g')
         ->toContain('22 can in stock')
         ->toContain('<vendora-json>');
+});
+
+test('assistant answers shift short question instead of searching products', function () {
+    StoreSetting::setValue('ai_openai_api_key', 'sk-test-secret');
+    $this->seed(RolesAndPermissionsSeeder::class);
+
+    $user = User::factory()->create(['role' => 'admin']);
+    $user->assignRole('Owner');
+
+    Shift::create([
+        'user_id' => $user->id,
+        'opened_at' => now()->subHour(),
+        'opening_balance' => 1000,
+        'status' => 'open',
+    ]);
+
+    Transaction::factory()->create([
+        'user_id' => $user->id,
+        'total' => 250,
+        'payment_method' => 'cash',
+        'status' => 'completed',
+        'created_at' => now()->subMinutes(10),
+    ]);
+
+    $response = $this->actingAs($user)->postJson(route('assistant.chat'), [
+        'message' => 'It is already close now, Do we have short now?',
+    ]);
+
+    $response->assertOk();
+
+    expect($response->json('message'))
+        ->toContain('shift is still open')
+        ->toContain('expected drawer cash')
+        ->toContain('₱1,250.00')
+        ->not->toContain('active product matching');
 });
 
 test('assistant top products question is not hijacked by previous invoice context', function () {
