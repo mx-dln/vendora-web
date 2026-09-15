@@ -1,11 +1,11 @@
 import { Link } from '@inertiajs/react';
+import { usePage } from '@inertiajs/react';
 import {
     LayoutGrid,
     ShoppingCart,
     Package,
     Users,
     Building2,
-    FileBarChart,
     UserCog,
     Boxes,
     Receipt,
@@ -13,7 +13,9 @@ import {
     ClipboardList,
     Barcode,
     ClipboardCheck,
-    Settings,
+    ChartLine,
+    PackageSearch,
+    History,
 } from 'lucide-react';
 import AppLogo from '@/components/app-logo';
 import { NavFooter } from '@/components/nav-footer';
@@ -31,7 +33,6 @@ import {
     SidebarGroupLabel,
 } from '@/components/ui/sidebar';
 import { useCurrentUrl } from '@/hooks/use-current-url';
-import { usePage } from '@inertiajs/react';
 import { dashboard } from '@/routes';
 import pos from '@/routes/pos';
 import type { NavItem } from '@/types';
@@ -39,7 +40,6 @@ import type { NavItem } from '@/types';
 const mainNavItems: NavItem[] = [
     { title: 'Dashboard', href: dashboard(), icon: LayoutGrid },
     { title: 'POS', href: pos.index(), icon: ShoppingCart },
-    { title: 'Online Orders', href: '/online-orders', icon: ClipboardCheck },
 ];
 
 const footerNavItems: NavItem[] = [];
@@ -53,18 +53,40 @@ export function AppSidebar() {
         }
     ).auth?.user;
     const userRoles = user?.roles?.map((r) => r.name) || [];
+    const settings = (props as { storeSettings?: Record<string, string> })
+        .storeSettings;
+    const canUseOnlineOrders =
+        settings?.storefront_enabled !== '0' &&
+        settings?.online_ordering_enabled === '1';
+    const visibleMainNavItems = canUseOnlineOrders
+        ? [
+              ...mainNavItems,
+              {
+                  title: 'Online Orders',
+                  href: '/online-orders',
+                  icon: ClipboardCheck,
+              },
+          ]
+        : mainNavItems;
     const isOwner = userRoles.includes('Owner');
     const isManager = userRoles.includes('Manager');
     const isCashier = userRoles.includes('Cashier');
     const canView = (module: string) => {
-        if (isOwner) return true;
+        if (isOwner) {
+            return true;
+        }
+
         if (
             isCashier &&
             ['dashboard', 'pos', 'customers', 'sales'].includes(module)
-        )
+        ) {
             return true;
-        if (isManager && !['users', 'roles', 'settings'].includes(module))
+        }
+
+        if (isManager && !['users', 'roles', 'settings'].includes(module)) {
             return true;
+        }
+
         return false;
     };
     const canManageUsers = isOwner;
@@ -88,27 +110,12 @@ export function AppSidebar() {
             </SidebarHeader>
 
             <SidebarContent>
-                <NavMain items={mainNavItems} />
+                <NavMain items={visibleMainNavItems} />
 
                 {canView('products') && (
                     <SidebarGroup className="px-2 py-0">
                         <SidebarGroupLabel>Management</SidebarGroupLabel>
                         <SidebarMenu>
-                            {isOwner && (
-                                <SidebarMenuItem>
-                                    <SidebarMenuButton
-                                        asChild
-                                        isActive={isCurrentUrl(
-                                            '/settings/store',
-                                        )}
-                                    >
-                                        <Link href="/settings/store" prefetch>
-                                            <Settings />
-                                            <span>Store Settings</span>
-                                        </Link>
-                                    </SidebarMenuButton>
-                                </SidebarMenuItem>
-                            )}
                             <SidebarMenuItem>
                                 <SidebarMenuButton
                                     asChild
@@ -264,7 +271,7 @@ export function AppSidebar() {
                                     isActive={isCurrentUrl('/reports/sales')}
                                 >
                                     <Link href="/reports/sales" prefetch>
-                                        <FileBarChart />
+                                        <ChartLine />
                                         <span>Sales Report</span>
                                     </Link>
                                 </SidebarMenuButton>
@@ -275,7 +282,7 @@ export function AppSidebar() {
                                     isActive={isCurrentUrl('/reports/products')}
                                 >
                                     <Link href="/reports/products" prefetch>
-                                        <FileBarChart />
+                                        <PackageSearch />
                                         <span>Product Report</span>
                                     </Link>
                                 </SidebarMenuButton>
@@ -288,7 +295,7 @@ export function AppSidebar() {
                                     )}
                                 >
                                     <Link href="/reports/inventory" prefetch>
-                                        <FileBarChart />
+                                        <Warehouse />
                                         <span>Inventory Report</span>
                                     </Link>
                                 </SidebarMenuButton>
@@ -307,7 +314,7 @@ export function AppSidebar() {
                                     isActive={isCurrentUrl('/activity-logs')}
                                 >
                                     <Link href="/activity-logs" prefetch>
-                                        <FileBarChart />
+                                        <History />
                                         <span>Activity Logs</span>
                                     </Link>
                                 </SidebarMenuButton>

@@ -1,6 +1,5 @@
-import { useState, useRef } from 'react';
 import { usePage } from '@inertiajs/react';
-import { toast } from 'sonner';
+import { router } from '@inertiajs/react';
 import {
     ChevronsUpDown,
     User as UserIcon,
@@ -12,19 +11,24 @@ import {
     Shield,
     Globe,
     ShoppingBag,
+    Bot,
 } from 'lucide-react';
-import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { useState, useRef } from 'react';
+import { toast } from 'sonner';
+import { KnowledgeBasePanel } from '@/components/knowledge-base-panel';
+import { RolesPanel } from '@/components/roles-panel';
+import { Button } from '@/components/ui/button';
 import {
     Dialog,
     DialogContent,
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -44,9 +48,6 @@ import {
 import { UserInfo } from '@/components/user-info';
 import { UserMenuContent } from '@/components/user-menu-content';
 import { useIsMobile } from '@/hooks/use-mobile';
-import { router } from '@inertiajs/react';
-import { KnowledgeBasePanel } from '@/components/knowledge-base-panel';
-import { RolesPanel } from '@/components/roles-panel';
 
 type SettingsTab = 'profile' | 'password' | 'store' | 'knowledge' | 'roles';
 
@@ -89,6 +90,7 @@ export function NavUser() {
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 22, 23,
             24, 25, 30, 35,
         ][i];
+
         return n ? `memo_${n}.png` : null;
     }).filter(Boolean) as string[];
 
@@ -120,10 +122,15 @@ export function NavUser() {
         receipt_show_discount: settings?.receipt_show_discount === '1',
         storefront_enabled: settings?.storefront_enabled !== '0',
         online_ordering_enabled: settings?.online_ordering_enabled === '1',
+        ai_provider: settings?.ai_provider || 'openai',
+        ai_model: settings?.ai_model || 'gpt-4.1-mini',
+        ai_openai_api_key: '',
     });
     const [storeSaving, setStoreSaving] = useState(false);
 
-    if (!user) return null;
+    if (!user) {
+        return null;
+    }
 
     return (
         <>
@@ -210,18 +217,21 @@ export function NavUser() {
                                                 'email',
                                                 profileEmail,
                                             );
+
                                             if (profileAvatar) {
                                                 formData.append(
                                                     'avatar',
                                                     profileAvatar,
                                                 );
                                             }
+
                                             if (profileAvatarPreset) {
                                                 formData.append(
                                                     'avatar_preset',
                                                     profileAvatarPreset,
                                                 );
                                             }
+
                                             formData.append('_method', 'PATCH');
                                             fetch('/settings/profile', {
                                                 method: 'POST',
@@ -292,6 +302,7 @@ export function NavUser() {
                                                     onChange={(e) => {
                                                         const file =
                                                             e.target.files?.[0];
+
                                                         if (file) {
                                                             setProfileAvatar(
                                                                 file,
@@ -332,6 +343,7 @@ export function NavUser() {
                                                         currentAvatar.includes(
                                                             name,
                                                         );
+
                                                     return (
                                                         <button
                                                             key={name}
@@ -408,12 +420,15 @@ export function NavUser() {
                                     <form
                                         onSubmit={(e) => {
                                             e.preventDefault();
+
                                             if (newPw !== confirmPw) {
                                                 setPwError(
                                                     'Passwords do not match',
                                                 );
+
                                                 return;
                                             }
+
                                             setPwProcessing(true);
                                             setPwError('');
                                             router.put(
@@ -854,6 +869,97 @@ export function NavUser() {
                                                     </span>
                                                 </span>
                                             </label>
+                                        </div>
+                                        <Separator />
+                                        <div className="space-y-3">
+                                            <h4 className="flex items-center gap-2 text-sm font-semibold">
+                                                <Bot className="size-4" />
+                                                AI Settings
+                                            </h4>
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div className="space-y-2">
+                                                    <Label>AI Provider</Label>
+                                                    <Select
+                                                        value={
+                                                            storeForm.ai_provider
+                                                        }
+                                                        onValueChange={(v) =>
+                                                            setStoreForm({
+                                                                ...storeForm,
+                                                                ai_provider: v,
+                                                            })
+                                                        }
+                                                    >
+                                                        <SelectTrigger className="w-full">
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="openai">
+                                                                OpenAI
+                                                            </SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <Label>AI Model</Label>
+                                                    <Select
+                                                        value={
+                                                            storeForm.ai_model
+                                                        }
+                                                        onValueChange={(v) =>
+                                                            setStoreForm({
+                                                                ...storeForm,
+                                                                ai_model: v,
+                                                            })
+                                                        }
+                                                    >
+                                                        <SelectTrigger className="w-full">
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="gpt-4.1-mini">
+                                                                GPT-4.1 mini
+                                                            </SelectItem>
+                                                            <SelectItem value="gpt-4.1">
+                                                                GPT-4.1
+                                                            </SelectItem>
+                                                            <SelectItem value="gpt-4o-mini">
+                                                                GPT-4o mini
+                                                            </SelectItem>
+                                                            <SelectItem value="gpt-4o">
+                                                                GPT-4o
+                                                            </SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label>OpenAI API Key</Label>
+                                                <Input
+                                                    type="password"
+                                                    autoComplete="off"
+                                                    value={
+                                                        storeForm.ai_openai_api_key
+                                                    }
+                                                    placeholder={
+                                                        settings?.ai_openai_api_key_configured ===
+                                                        '1'
+                                                            ? 'API key already configured'
+                                                            : 'sk-...'
+                                                    }
+                                                    onChange={(e) =>
+                                                        setStoreForm({
+                                                            ...storeForm,
+                                                            ai_openai_api_key:
+                                                                e.target.value,
+                                                        })
+                                                    }
+                                                />
+                                                <p className="text-xs text-muted-foreground">
+                                                    Leave this blank to keep the
+                                                    current key.
+                                                </p>
+                                            </div>
                                         </div>
                                         <Button
                                             type="submit"

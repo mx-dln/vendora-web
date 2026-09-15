@@ -67,6 +67,85 @@ test('online orders page renders for authenticated users', function () {
     );
 });
 
+test('store settings mask and preserve configured openai api key', function () {
+    $user = User::factory()->create();
+
+    $this->actingAs($user)->post(route('settings.store.update'), [
+        'store_name' => 'Vendora Store',
+        'store_email' => 'owner@example.com',
+        'receipt_width' => '80',
+        'receipt_show_logo' => true,
+        'receipt_show_tax' => true,
+        'receipt_show_discount' => true,
+        'tax_rate' => '0',
+        'currency_symbol' => 'PHP',
+        'currency_code' => 'PHP',
+        'storefront_enabled' => true,
+        'online_ordering_enabled' => true,
+        'ai_provider' => 'openai',
+        'ai_model' => 'gpt-4.1',
+        'ai_openai_api_key' => 'sk-test-secret',
+    ])->assertRedirect();
+
+    expect(StoreSetting::where('key', 'ai_openai_api_key')->value('value'))
+        ->not->toBe('sk-test-secret')
+        ->and(StoreSetting::getValue('ai_openai_api_key'))
+        ->toBe('sk-test-secret');
+
+    $this->actingAs($user)
+        ->get(route('settings.store.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('settings/store/index')
+            ->where('settings.ai_openai_api_key', '')
+            ->where('settings.ai_openai_api_key_configured', '1')
+            ->where('settings.ai_model', 'gpt-4.1'),
+        );
+
+    $this->actingAs($user)->post(route('settings.store.update'), [
+        'store_name' => 'Vendora Store',
+        'store_email' => 'owner@example.com',
+        'receipt_width' => '80',
+        'receipt_show_logo' => true,
+        'receipt_show_tax' => true,
+        'receipt_show_discount' => true,
+        'tax_rate' => '0',
+        'currency_symbol' => 'PHP',
+        'currency_code' => 'PHP',
+        'storefront_enabled' => true,
+        'online_ordering_enabled' => true,
+        'ai_provider' => 'openai',
+        'ai_model' => 'gpt-4.1-mini',
+        'ai_openai_api_key' => '',
+    ])->assertRedirect();
+
+    expect(StoreSetting::getValue('ai_openai_api_key'))->toBe('sk-test-secret');
+});
+
+test('assistant availability requires configured api key', function () {
+    config(['openai.api_key' => null]);
+    $this->seed(RolesAndPermissionsSeeder::class);
+
+    $user = User::factory()->create(['role' => 'admin']);
+    $user->assignRole('Owner');
+
+    $this->actingAs($user)
+        ->get(route('dashboard'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('canUseAssistant', false),
+        );
+
+    StoreSetting::setValue('ai_openai_api_key', 'sk-test-secret');
+
+    $this->actingAs($user)
+        ->get(route('dashboard'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('canUseAssistant', true),
+        );
+});
+
 test('online order status can be updated', function () {
     $user = User::factory()->create();
     $order = OnlineOrder::factory()->create([
@@ -91,6 +170,7 @@ test('online order status can be updated', function () {
 });
 
 test('assistant returns exact invoice line items from system data', function () {
+    StoreSetting::setValue('ai_openai_api_key', 'sk-test-secret');
     $this->seed(RolesAndPermissionsSeeder::class);
 
     $user = User::factory()->create(['role' => 'admin']);
@@ -126,6 +206,7 @@ test('assistant returns exact invoice line items from system data', function () 
 });
 
 test('assistant returns product availability from system data', function () {
+    StoreSetting::setValue('ai_openai_api_key', 'sk-test-secret');
     $this->seed(RolesAndPermissionsSeeder::class);
 
     $user = User::factory()->create(['role' => 'admin']);
@@ -165,6 +246,7 @@ test('assistant returns product availability from system data', function () {
 });
 
 test('assistant top products question is not hijacked by previous invoice context', function () {
+    StoreSetting::setValue('ai_openai_api_key', 'sk-test-secret');
     $this->seed(RolesAndPermissionsSeeder::class);
 
     $user = User::factory()->create(['role' => 'admin']);

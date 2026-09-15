@@ -1,7 +1,8 @@
 import { Head, router } from '@inertiajs/react';
+import { Bot, Globe, Save, ShoppingBag, Store } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { Globe, Save, ShoppingBag, Store } from 'lucide-react';
+import { PageHeader } from '@/components/page-header';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -13,7 +14,6 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
-import { PageHeader } from '@/components/page-header';
 import store from '@/routes/settings/store';
 
 interface Props {
@@ -41,6 +41,9 @@ export default function SettingsStoreIndex({ settings }: Props) {
         currency_code: settings.currency_code || 'PHP',
         storefront_enabled: settings.storefront_enabled !== '0',
         online_ordering_enabled: settings.online_ordering_enabled === '1',
+        ai_provider: settings.ai_provider || 'openai',
+        ai_model: settings.ai_model || 'gpt-4.1-mini',
+        ai_openai_api_key: '',
     });
     const [saving, setSaving] = useState(false);
 
@@ -381,6 +384,92 @@ export default function SettingsStoreIndex({ settings }: Props) {
                                     </span>
                                 </span>
                             </label>
+                        </CardContent>
+                    </Card>
+
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <Bot className="size-4" /> AI Settings
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <Label>AI Provider</Label>
+                                    <Select
+                                        value={form.ai_provider}
+                                        onValueChange={(v) =>
+                                            setForm({
+                                                ...form,
+                                                ai_provider: v,
+                                            })
+                                        }
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="openai">
+                                                OpenAI
+                                            </SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>AI Model</Label>
+                                    <Select
+                                        value={form.ai_model}
+                                        onValueChange={(v) =>
+                                            setForm({
+                                                ...form,
+                                                ai_model: v,
+                                            })
+                                        }
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="gpt-4.1-mini">
+                                                GPT-4.1 mini
+                                            </SelectItem>
+                                            <SelectItem value="gpt-4.1">
+                                                GPT-4.1
+                                            </SelectItem>
+                                            <SelectItem value="gpt-4o-mini">
+                                                GPT-4o mini
+                                            </SelectItem>
+                                            <SelectItem value="gpt-4o">
+                                                GPT-4o
+                                            </SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>OpenAI API Key</Label>
+                                <Input
+                                    type="password"
+                                    autoComplete="off"
+                                    value={form.ai_openai_api_key}
+                                    placeholder={
+                                        settings.ai_openai_api_key_configured ===
+                                        '1'
+                                            ? 'API key already configured'
+                                            : 'sk-...'
+                                    }
+                                    onChange={(e) =>
+                                        setForm({
+                                            ...form,
+                                            ai_openai_api_key: e.target.value,
+                                        })
+                                    }
+                                />
+                                <p className="text-sm text-muted-foreground">
+                                    Leave this blank to keep the current key.
+                                </p>
+                            </div>
                         </CardContent>
                     </Card>
 

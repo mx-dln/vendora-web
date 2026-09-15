@@ -25,11 +25,11 @@ class HandleInertiaRequests extends Middleware
             ],
             'app_env' => app()->environment(),
             'sidebarOpen' => ! $request->hasCookie('sidebar_state') || $request->cookie('sidebar_state') === 'true',
-            'storeSettings' => StoreSetting::all()->pluck('value', 'key')->toArray(),
+            'storeSettings' => StoreSetting::publicSettings(),
             'unreadNotifications' => $request->user()
                 ? $request->user()->unreadNotifications()->count()
                 : 0,
-            'canUseAssistant' => $request->user()?->can('assistant.use') ?? false,
+            'canUseAssistant' => ($request->user()?->can('assistant.use') ?? false) && StoreSetting::hasAiApiKey(),
         ];
     }
 }

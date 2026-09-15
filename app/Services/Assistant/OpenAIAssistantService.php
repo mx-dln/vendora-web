@@ -6,9 +6,14 @@ use App\Enums\TransactionStatus;
 use App\Models\AssistantConversation;
 use App\Models\AssistantMessage;
 use App\Models\Customer;
+use App\Models\Expense;
 use App\Models\KnowledgeArticle;
+use App\Models\OnlineOrder;
 use App\Models\Product;
+use App\Models\StoreSetting;
 use App\Models\Transaction;
+use App\Models\TransactionItem;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -30,6 +35,10 @@ class OpenAIAssistantService
     {
         if (! Auth::user()?->can('assistant.use')) {
             abort(403, 'You do not have permission to use the AI assistant.');
+        }
+
+        if (! StoreSetting::hasAiApiKey()) {
+            abort(403, 'AI assistant is disabled until an OpenAI API key is configured.');
         }
 
         $conversation = $conversationId
@@ -89,6 +98,10 @@ class OpenAIAssistantService
             abort(403, 'You do not have permission to use the AI assistant.');
         }
 
+        if (! StoreSetting::hasAiApiKey()) {
+            abort(403, 'AI assistant is disabled until an OpenAI API key is configured.');
+        }
+
         $conversation = $conversationId
             ? AssistantConversation::findOrFail($conversationId)
             : AssistantConversation::create(['user_id' => Auth::id(), 'title' => substr($message, 0, 50)]);
@@ -128,7 +141,7 @@ class OpenAIAssistantService
                 }
                 ob_implicit_flush(true);
 
-                $client = \OpenAI::client(config('openai.api_key'));
+                $client = \OpenAI::client($this->openAiApiKey());
 
                 Log::info('[AI] Sending request to OpenAI', ['conversation_id' => $conversation->id]);
 
@@ -142,7 +155,7 @@ class OpenAIAssistantService
                     }
 
                     $stream = $client->chat()->createStreamed([
-                        'model' => config('openai.model'),
+                        'model' => $this->openAiModel(),
                         'messages' => $messages,
                         'temperature' => 0.7,
                         'max_tokens' => 2000,
@@ -299,6 +312,37 @@ class OpenAIAssistantService
         flush();
     }
 
+    private function openAiApiKey(): ?string
+    {
+        return StoreSetting::getValue('ai_openai_api_key', config('openai.api_key'));
+    }
+
+    private function openAiModel(): string
+    {
+        return StoreSetting::getValue('ai_model', config('openai.model', 'gpt-4.1-mini'));
+    }
+
+    private function buildBusinessContextForPrompt(): string
+    {
+        try {
+            $summary = $this->getBusinessOverview('month');
+
+            return implode("\n", [
+                '- Store: '.StoreSetting::getValue('store_name', 'Vendora Store'),
+                '- Month sales: ₱'.number_format((float) $summary['sales']['total'], 2).' across '.$summary['sales']['transactions'].' completed transactions.',
+                '- Month gross profit estimate: ₱'.number_format((float) $summary['profit']['gross_profit'], 2).' (margin '.$summary['profit']['gross_margin_percent'].'%).',
+                '- Month expenses: ₱'.number_format((float) $summary['expenses']['total'], 2).'. Net operating estimate: ₱'.number_format((float) $summary['profit']['net_operating_estimate'], 2).'.',
+                '- Inventory: '.$summary['inventory']['active_products'].' active products, '.$summary['inventory']['low_stock_products'].' low stock, '.$summary['inventory']['out_of_stock_products'].' out of stock, ₱'.number_format((float) $summary['inventory']['cost_value'], 2).' cost value.',
+                '- Customers: '.$summary['customers']['active'].' active customers. Online orders pending: '.$summary['online_orders']['pending'].'.',
+                '- Use tools for exact details before making specific claims.',
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('[AI] Failed to build business prompt context', ['message' => $e->getMessage()]);
+
+            return '- Live business snapshot unavailable. Use tools before making data-specific claims.';
+        }
+    }
+
     private function extractContext(array $toolResults): array
     {
         $context = [];
@@ -377,6 +421,7 @@ class OpenAIAssistantService
 
         $date = now()->format('l, F j, Y');
         $time = now()->format('g:i A');
+        $businessContext = $this->buildBusinessContextForPrompt();
 
         $pageContext = '';
         if ($currentPage) {
@@ -408,13 +453,18 @@ Current Information:
 - Time: {$time}
 - Cashier/User: {$user->name} ({$user->email}){$pageContext}{$contextStr}
 
+Live System Snapshot:
+{$businessContext}
+
 YOUR CAPABILITIES:
 - Answer business questions using live system data by calling the available tool functions.
-- Analyze sales, inventory, customers, expenses, and reports.
+- Analyze sales, inventory, customers, expenses, reports, online orders, financial health, gross margin, cash flow pressure, inventory risk, ROI signals, and operational strategy.
 - Review transactions, invoices, and customer details.
+- Explain how every Vendora module works and how modules connect to the database and workflows.
 - Use sales.view permission tools to look up invoices and transactions.
-- Provide actionable recommendations.
-- Maintain professional, concise responses.
+- Provide owner-level advice: diagnose the situation, explain why it matters, quantify impact where data is available, identify risks, and propose concrete next actions.
+- For strategic questions, produce a complete answer with assumptions, calculations, recommended actions, and what data is missing.
+- Maintain professional, clear, complete responses. Be concise for simple questions, but give complex answers for business, finance, ROI, operations, and planning questions.
 
 CRITICAL RULES — VIOLATION WILL CAUSE SYSTEM FAILURE:
 
@@ -473,14 +523,14 @@ PROMPT;
     private function callOpenAI(array $messages): array
     {
         try {
-            $client = \OpenAI::client(config('openai.api_key'));
+            $client = \OpenAI::client($this->openAiApiKey());
 
             $response = '';
             $suggestions = [];
 
             for ($loop = 0; $loop < 5; $loop++) {
                 $result = $client->chat()->create([
-                    'model' => config('openai.model'),
+                    'model' => $this->openAiModel(),
                     'messages' => $messages,
                     'temperature' => 0.7,
                     'max_tokens' => 2000,
@@ -802,6 +852,57 @@ PROMPT;
             [
                 'type' => 'function',
                 'function' => [
+                    'name' => 'getBusinessOverview',
+                    'description' => 'Get a broad owner dashboard for sales, profit, expenses, inventory, customers, and online orders. Use for store health, business advice, owner questions, strategy, and “how is my store doing?” questions.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'period' => [
+                                'type' => 'string',
+                                'enum' => ['today', 'week', 'month', 'year', 'all'],
+                                'description' => 'Business period to analyze.',
+                            ],
+                        ],
+                        'required' => [],
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'getFinancialHealth',
+                    'description' => 'Get financial health metrics: revenue, cost of goods sold, gross profit, gross margin, expenses, estimated net operating profit, average order value, discount leakage, and category expense breakdown.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'period' => [
+                                'type' => 'string',
+                                'enum' => ['today', 'week', 'month', 'year', 'all'],
+                            ],
+                        ],
+                        'required' => [],
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'getRoiAnalysis',
+                    'description' => 'Get ROI and capital efficiency indicators including inventory cost value, retail value, gross margin potential, month sales, stock turn estimate, dead-stock risk, low-stock risk, and top margin contributors.',
+                    'parameters' => ['type' => 'object', 'properties' => (object) [], 'required' => []],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'getDatabaseOverview',
+                    'description' => 'Get a safe overview of the Vendora database tables and columns plus record counts. Use when the owner asks what the AI knows about the system, database, modules, or available data.',
+                    'parameters' => ['type' => 'object', 'properties' => (object) [], 'required' => []],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
                     'name' => 'getSystemCapabilities',
                     'description' => 'Get a complete list of installed Vendora system modules, pages, reports, and available assistant tools. Use this when the user asks what you can do, what features exist, or what modules are available.',
                     'parameters' => ['type' => 'object', 'properties' => (object) [], 'required' => []],
@@ -838,6 +939,10 @@ PROMPT;
             'getTransactionDetails' => 'sales.view',
             'getCustomerDetails' => 'customers.view',
             'getProductDetails' => 'products.view',
+            'getBusinessOverview' => 'reports.view',
+            'getFinancialHealth' => 'reports.view',
+            'getRoiAnalysis' => 'reports.view',
+            'getDatabaseOverview' => null,
             'getSystemCapabilities' => null,
         ];
 
@@ -864,6 +969,10 @@ PROMPT;
             'getTransactionDetails' => $this->getTransactionDetails($arguments['id']),
             'getCustomerDetails' => $this->getCustomerDetails($arguments['id']),
             'getProductDetails' => $this->getProductDetails($arguments['id']),
+            'getBusinessOverview' => $this->getBusinessOverview($arguments['period'] ?? 'month'),
+            'getFinancialHealth' => $this->getFinancialHealth($arguments['period'] ?? 'month'),
+            'getRoiAnalysis' => $this->getRoiAnalysis(),
+            'getDatabaseOverview' => $this->getDatabaseOverview(),
             'getSystemCapabilities' => $this->getSystemCapabilities(),
             default => ['error' => 'Unknown tool', 'message' => "Tool {$name} is not registered."],
         };
@@ -1287,6 +1396,239 @@ PROMPT;
         ];
     }
 
+    private function getBusinessOverview(string $period = 'month'): array
+    {
+        [$start, $end] = $this->dateRange($period);
+        $transactionQuery = $this->completedTransactionsForPeriod($start, $end);
+        $sales = (clone $transactionQuery)
+            ->toBase()
+            ->selectRaw('COALESCE(SUM(total), 0) as total')
+            ->selectRaw('COUNT(*) as transactions')
+            ->selectRaw('COALESCE(AVG(total), 0) as average_sale')
+            ->selectRaw('COALESCE(SUM(discount_amount), 0) as discounts')
+            ->first();
+
+        $itemQuery = TransactionItem::query()
+            ->whereIn('transaction_id', (clone $transactionQuery)->select('id'));
+
+        $costOfGoods = (clone $itemQuery)->selectRaw('COALESCE(SUM(cost_price * quantity), 0) as value')->value('value');
+        $grossProfit = (float) $sales->total - (float) $costOfGoods;
+        $expenses = $this->expensesForPeriod($start, $end);
+        $expenseTotal = (clone $expenses)->sum('amount');
+        $inventory = $this->inventorySummary();
+
+        return [
+            'period' => $period,
+            'range' => [
+                'start' => $start?->toDateTimeString(),
+                'end' => $end?->toDateTimeString(),
+            ],
+            'sales' => [
+                'total' => round((float) $sales->total, 2),
+                'transactions' => (int) $sales->transactions,
+                'average_sale' => round((float) $sales->average_sale, 2),
+                'discounts' => round((float) $sales->discounts, 2),
+            ],
+            'profit' => [
+                'cost_of_goods_sold' => round((float) $costOfGoods, 2),
+                'gross_profit' => round($grossProfit, 2),
+                'gross_margin_percent' => $sales->total > 0 ? round(($grossProfit / (float) $sales->total) * 100, 2) : 0,
+                'net_operating_estimate' => round($grossProfit - (float) $expenseTotal, 2),
+                'note' => 'Net operating profit is an estimate: revenue minus item COGS minus recorded expenses for the selected period.',
+            ],
+            'expenses' => [
+                'total' => round((float) $expenseTotal, 2),
+                'count' => (clone $expenses)->count(),
+            ],
+            'inventory' => $inventory,
+            'customers' => [
+                'active' => Customer::active()->count(),
+                'total' => Customer::count(),
+            ],
+            'online_orders' => [
+                'pending' => OnlineOrder::where('status', 'pending')->count(),
+                'completed' => OnlineOrder::where('status', 'completed')->count(),
+            ],
+            'recommendation_inputs' => [
+                'low_stock_risk' => $inventory['low_stock_products'] > 0,
+                'out_of_stock_risk' => $inventory['out_of_stock_products'] > 0,
+                'expense_pressure' => $expenseTotal > $grossProfit,
+                'discount_leakage_percent' => $sales->total > 0 ? round(((float) $sales->discounts / ((float) $sales->total + (float) $sales->discounts)) * 100, 2) : 0,
+            ],
+        ];
+    }
+
+    private function getFinancialHealth(string $period = 'month'): array
+    {
+        $overview = $this->getBusinessOverview($period);
+        [$start, $end] = $this->dateRange($period);
+
+        $expenseBreakdown = $this->expensesForPeriod($start, $end)
+            ->leftJoin('expense_categories', 'expenses.expense_category_id', '=', 'expense_categories.id')
+            ->toBase()
+            ->selectRaw("COALESCE(expense_categories.name, 'Uncategorized') as category")
+            ->selectRaw('COALESCE(SUM(expenses.amount), 0) as total')
+            ->groupBy('category')
+            ->orderByDesc('total')
+            ->limit(10)
+            ->get()
+            ->map(fn ($row) => [
+                'category' => $row->category,
+                'total' => round((float) $row->total, 2),
+            ])
+            ->values();
+
+        return [
+            ...$overview,
+            'expense_breakdown' => $expenseBreakdown,
+            'health_flags' => [
+                'gross_margin_low' => $overview['profit']['gross_margin_percent'] > 0 && $overview['profit']['gross_margin_percent'] < 20,
+                'net_operating_loss_estimate' => $overview['profit']['net_operating_estimate'] < 0,
+                'high_discount_leakage' => $overview['recommendation_inputs']['discount_leakage_percent'] >= 10,
+                'inventory_cash_tied_up' => $overview['inventory']['cost_value'] > max($overview['sales']['total'] * 2, 1),
+            ],
+        ];
+    }
+
+    private function getRoiAnalysis(): array
+    {
+        $month = $this->getBusinessOverview('month');
+        $inventory = $month['inventory'];
+        $stockTurnEstimate = $inventory['cost_value'] > 0
+            ? round($month['profit']['cost_of_goods_sold'] / $inventory['cost_value'], 3)
+            : null;
+
+        $topMarginProducts = TransactionItem::query()
+            ->whereIn('transaction_id', $this->completedTransactionsForPeriod(now()->startOfMonth(), now())->select('id'))
+            ->toBase()
+            ->selectRaw('product_name')
+            ->selectRaw('COALESCE(SUM((unit_price - cost_price) * quantity), 0) as gross_profit')
+            ->selectRaw('COALESCE(SUM(total), 0) as revenue')
+            ->groupBy('product_name')
+            ->orderByDesc('gross_profit')
+            ->limit(10)
+            ->get()
+            ->map(fn ($row) => [
+                'product' => $row->product_name,
+                'revenue' => round((float) $row->revenue, 2),
+                'gross_profit' => round((float) $row->gross_profit, 2),
+            ])
+            ->values();
+
+        $deadStockRisk = Product::active()
+            ->where('track_inventory', true)
+            ->where('stock_quantity', '>', 0)
+            ->whereNotIn('id', TransactionItem::query()
+                ->whereIn('transaction_id', $this->completedTransactionsForPeriod(now()->subDays(90), now())->select('id'))
+                ->whereNotNull('product_id')
+                ->select('product_id'))
+            ->orderByDesc(DB::raw('stock_quantity * cost_price'))
+            ->limit(10)
+            ->get(['id', 'name', 'stock_quantity', 'cost_price', 'selling_price'])
+            ->map(fn (Product $product) => [
+                'id' => $product->id,
+                'name' => $product->name,
+                'stock' => (int) $product->stock_quantity,
+                'cost_value' => round((float) $product->stock_quantity * (float) $product->cost_price, 2),
+                'retail_value' => round((float) $product->stock_quantity * (float) $product->selling_price, 2),
+            ])
+            ->values();
+
+        return [
+            'period' => 'month',
+            'sales' => $month['sales'],
+            'profit' => $month['profit'],
+            'inventory' => $inventory,
+            'stock_turn_estimate' => $stockTurnEstimate,
+            'inventory_roi_estimate_percent' => $inventory['cost_value'] > 0 ? round(($month['profit']['gross_profit'] / $inventory['cost_value']) * 100, 2) : null,
+            'top_margin_products' => $topMarginProducts,
+            'dead_stock_risk' => $deadStockRisk,
+            'notes' => [
+                'ROI is estimated from current inventory cost value and month-to-date gross profit.',
+                'Dead-stock risk means stocked products with no recorded sale in the last 90 days.',
+            ],
+        ];
+    }
+
+    private function getDatabaseOverview(): array
+    {
+        $tables = collect(Schema::getTables())
+            ->map(fn (array $table) => $table['name'] ?? $table['table'] ?? array_values($table)[0] ?? null)
+            ->filter()
+            ->filter(fn (string $table) => ! str_starts_with($table, 'cache'))
+            ->values()
+            ->map(function (string $table) {
+                return [
+                    'table' => $table,
+                    'records' => DB::table($table)->count(),
+                    'columns' => Schema::getColumnListing($table),
+                ];
+            });
+
+        return [
+            'system' => 'Vendora POS and Inventory Management',
+            'database_tables' => $tables,
+            'important_domains' => [
+                'sales' => ['transactions', 'transaction_items', 'payments', 'shifts'],
+                'inventory' => ['products', 'categories', 'inventory_movements', 'stock_counts', 'purchase_orders'],
+                'customers' => ['customers', 'loyalty_points_transactions', 'loyalty_rewards'],
+                'expenses' => ['expenses', 'expense_categories'],
+                'storefront' => ['online_orders', 'promotions', 'store_settings'],
+                'assistant' => ['assistant_conversations', 'assistant_messages', 'knowledge_articles'],
+            ],
+        ];
+    }
+
+    /**
+     * @return array{0: Carbon|null, 1: Carbon|null}
+     */
+    private function dateRange(string $period): array
+    {
+        return match ($period) {
+            'today' => [now()->startOfDay(), now()->endOfDay()],
+            'week' => [now()->startOfWeek(), now()->endOfWeek()],
+            'year' => [now()->startOfYear(), now()->endOfYear()],
+            'all' => [null, null],
+            default => [now()->startOfMonth(), now()->endOfMonth()],
+        };
+    }
+
+    private function completedTransactionsForPeriod($start, $end)
+    {
+        return Transaction::query()
+            ->where('status', TransactionStatus::Completed->value)
+            ->when($start, fn ($query) => $query->where('created_at', '>=', $start))
+            ->when($end, fn ($query) => $query->where('created_at', '<=', $end));
+    }
+
+    private function expensesForPeriod($start, $end)
+    {
+        return Expense::query()
+            ->when($start, fn ($query) => $query->where('expense_date', '>=', $start->toDateString()))
+            ->when($end, fn ($query) => $query->where('expense_date', '<=', $end->toDateString()));
+    }
+
+    private function inventorySummary(): array
+    {
+        $summary = Product::query()
+            ->toBase()
+            ->selectRaw("COUNT(CASE WHEN status = 'active' THEN 1 END) as active_products")
+            ->selectRaw('COUNT(CASE WHEN track_inventory = 1 AND stock_quantity <= low_stock_threshold AND stock_quantity > 0 THEN 1 END) as low_stock_products')
+            ->selectRaw('COUNT(CASE WHEN track_inventory = 1 AND stock_quantity <= 0 THEN 1 END) as out_of_stock_products')
+            ->selectRaw('COALESCE(SUM(stock_quantity * cost_price), 0) as cost_value')
+            ->selectRaw('COALESCE(SUM(stock_quantity * selling_price), 0) as retail_value')
+            ->first();
+
+        return [
+            'active_products' => (int) $summary->active_products,
+            'low_stock_products' => (int) $summary->low_stock_products,
+            'out_of_stock_products' => (int) $summary->out_of_stock_products,
+            'cost_value' => round((float) $summary->cost_value, 2),
+            'retail_value' => round((float) $summary->retail_value, 2),
+            'potential_markup_value' => round((float) $summary->retail_value - (float) $summary->cost_value, 2),
+        ];
+    }
+
     private function getSystemCapabilities(): array
     {
         $modules = [
@@ -1397,6 +1739,10 @@ PROMPT;
             'getTransactionDetails' => 'Get full transaction details including items, payments, profit, and anomaly detection.',
             'getCustomerDetails' => 'View customer profile with purchase history and loyalty info.',
             'getProductDetails' => 'Get product details including stock levels and pricing.',
+            'getBusinessOverview' => 'Analyze overall store health across sales, profit, expenses, customers, inventory, and online orders.',
+            'getFinancialHealth' => 'Review revenue, COGS, gross profit, expenses, net operating estimate, discounts, and financial risk flags.',
+            'getRoiAnalysis' => 'Estimate inventory ROI, stock turn, dead-stock risk, and top gross-profit contributors.',
+            'getDatabaseOverview' => 'Summarize database tables, columns, record counts, and major business domains.',
             'searchKnowledgeBase' => 'Search the knowledge base for help articles about system features.',
         ];
 

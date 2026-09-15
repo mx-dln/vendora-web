@@ -13,10 +13,8 @@ class StoreSettingController extends Controller
 {
     public function index(): Response
     {
-        $settings = StoreSetting::all()->pluck('value', 'key')->toArray();
-
         return Inertia::render('settings/store/index', [
-            'settings' => $settings,
+            'settings' => StoreSetting::publicSettings(),
         ]);
     }
 
@@ -41,13 +39,17 @@ class StoreSettingController extends Controller
             'currency_code' => ['nullable', 'string', 'max:10'],
             'storefront_enabled' => ['boolean'],
             'online_ordering_enabled' => ['boolean'],
+            'ai_provider' => ['nullable', 'string', 'in:openai'],
+            'ai_model' => ['nullable', 'string', 'max:100'],
+            'ai_openai_api_key' => ['nullable', 'string', 'max:255'],
         ]);
 
         foreach ($validated as $key => $value) {
-            StoreSetting::updateOrCreate(
-                ['key' => $key],
-                ['value' => is_bool($value) ? ($value ? '1' : '0') : (string) $value]
-            );
+            if ($key === 'ai_openai_api_key' && blank($value)) {
+                continue;
+            }
+
+            StoreSetting::setValue($key, $value);
         }
 
         cache()->forget('public.store');
